@@ -1,0 +1,16 @@
+services:
+  drain:
+    build: .
+    restart: unless-stopped
+    environment:
+      DRAIN_DB_PATH: /data/drain.sqlite3
+      DRAIN_ADMIN_USER: ${DRAIN_ADMIN_USER:?set in Dokploy}
+      DRAIN_ADMIN_PASSWORD: ${DRAIN_ADMIN_PASSWORD:?set in Dokploy}
+      DRAIN_INSTANCE_SALT: ${DRAIN_INSTANCE_SALT:?set in Dokploy}
+    volumes:
+      - drain-data:/data
+    expose:
+      - "8080"
+
+volumes:
+  drain-data:
