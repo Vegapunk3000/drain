@@ -35,7 +35,6 @@ def get_db(path: str):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute("PRAGMA journal_mode = WAL")
     try:
         yield conn
     except Exception:
