@@ -7,6 +7,7 @@ import os
 import secrets
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -29,12 +30,21 @@ def iso_now() -> str:
     return utc_now().isoformat(timespec="seconds")
 
 
-def get_db(path: str) -> sqlite3.Connection:
+@contextmanager
+def get_db(path: str):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def init_db(path: str) -> None:
