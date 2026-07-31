@@ -243,7 +243,7 @@ def create_app(config: dict[str, str] | None = None) -> Flask:
         return Response(
             "Drain receives anonymous install and heartbeat counts for Forest, Nabu, Enkii, and Argus. "
             "Clients generate a random instance ID; the server stores only a one-way hash of it. "
-            "Disable reporting with the project's documented telemetry opt-out setting or environment variable.",
+            "Disable reporting with the project's documented usage-reporting opt-out setting or environment variable.",
             mimetype="text/plain",
         )
 

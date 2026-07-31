@@ -49,7 +49,7 @@ curl -i https://drain.timi.click/v1/events \
   }'
 ```
 
-Integrations must be opt-out and must not block the main tool if Drain is unavailable. Use a short timeout and swallow network errors.
+Clients must make reporting opt-out and must not block the main tool if Drain is unavailable. Use a short timeout and swallow network errors.
 
 ## Deployment
 
