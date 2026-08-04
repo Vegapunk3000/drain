@@ -91,6 +91,11 @@ def test_article_views_count_unique_ips_without_returning_ip(client):
     assert repeat.json["count"] == 1
     assert second.json["count"] == 2
     assert "203.0.113" not in first.get_data(as_text=True)
+    read_only = client.get(
+        "/v1/article-views?article=how-i-ship-without-reading-code",
+        headers=headers,
+    )
+    assert read_only.json == {"article": "how-i-ship-without-reading-code", "count": 2}
 
 
 def test_article_views_reject_bad_slugs_and_foreign_origins(client):

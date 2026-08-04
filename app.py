@@ -342,6 +342,18 @@ def create_app(config: dict[str, str] | None = None) -> Flask:
     def article_views_options():
         return Response(status=204)
 
+    @app.get("/v1/article-views")
+    def article_views_count():
+        try:
+            article = _validate_article(request.args.get("article"))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        with get_db(db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM article_views WHERE article = ?", (article,)
+            ).fetchone()[0]
+        return jsonify(article=article, count=count)
+
     @app.post("/v1/article-views")
     def article_views():
         payload = request.get_json(silent=True) or {}
