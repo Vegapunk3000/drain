@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import html
 import os
+import re
 import secrets
 import sqlite3
 import uuid
@@ -14,9 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from flask import Flask, Response, jsonify, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-PROJECTS = {"forest", "nabu", "enkii", "argus"}
+PROJECTS = {"forest", "nabu", "enkii", "argus", "dotmd"}
 EVENTS = {"install", "heartbeat", "upgrade", "uninstall"}
+ARTICLE_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,119}$")
 MAX_VERSION_LENGTH = 80
 MAX_PLATFORM_LENGTH = 40
 MAX_RUNTIME_LENGTH = 80
@@ -66,6 +69,16 @@ def init_db(path: str) -> None:
                 ON events(project, created_at);
             CREATE INDEX IF NOT EXISTS idx_events_instance_created
                 ON events(instance_hash, created_at);
+            CREATE TABLE IF NOT EXISTS article_views (
+                article TEXT NOT NULL,
+                ip_hash TEXT NOT NULL,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                hits INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (article, ip_hash)
+            );
+            CREATE INDEX IF NOT EXISTS idx_article_views_article
+                ON article_views(article);
             """
         )
 
@@ -140,6 +153,37 @@ def _instance_hash(instance_id: str, salt: str) -> str:
     return hmac.new(salt.encode("utf-8"), instance_id.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _article_ip_hash(article: str, ip_address: str, salt: str) -> str:
+    message = f"article:{article}\x00ip:{ip_address}".encode("utf-8")
+    return hmac.new(salt.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def _validate_article(value: Any) -> str:
+    if not isinstance(value, str) or not ARTICLE_SLUG.fullmatch(value):
+        raise ValueError("article must be a valid slug")
+    return value
+
+
+def _article_ip() -> str:
+    # ProxyFix below trusts exactly one reverse proxy. The app is not directly
+    # exposed; never accept arbitrary client-supplied forwarding headers here.
+    return request.remote_addr or "unknown"
+
+
+def _article_summary(path: str) -> list[dict[str, Any]]:
+    with get_db(path) as conn:
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT article, COUNT(*) AS unique_readers, SUM(hits) AS total_reads,
+                       MAX(last_seen) AS last_read
+                FROM article_views GROUP BY article ORDER BY unique_readers DESC, article
+                """
+            ).fetchall()
+        ]
+
+
 def _summary(path: str, now: datetime) -> dict[str, Any]:
     with get_db(path) as conn:
         total = conn.execute("SELECT COUNT(DISTINCT instance_hash) FROM events").fetchone()[0]
@@ -190,6 +234,7 @@ def _summary(path: str, now: datetime) -> dict[str, Any]:
         "total_instances": total,
         "total_install_events": installs,
         "projects": projects,
+        "articles": _article_summary(path),
         "recent_events": recent,
     }
 
@@ -206,6 +251,10 @@ def _dashboard_html(summary: dict[str, Any]) -> str:
         f"<tr><td>{esc(row['project'])}</td><td>{esc(row['event'])}</td><td>{esc(row['version'])}</td><td>{esc(row['platform'])}</td><td>{esc(row['created_at'])}</td></tr>"
         for row in summary["recent_events"]
     ) or '<tr><td colspan="5">No events yet.</td></tr>'
+    article_rows = "".join(
+        f"<tr><td>{esc(row['article'])}</td><td>{esc(row['unique_readers'])}</td><td>{esc(row['total_reads'])}</td><td>{esc(row['last_read'])}</td></tr>"
+        for row in summary["articles"]
+    ) or '<tr><td colspan="4">No article reads yet.</td></tr>'
     version_sections = "".join(
         f"<section><h3>{esc(name)}</h3><ul>" + "".join(
             f"<li><code>{esc(v['version'])}</code><span>{esc(v['instances'])} instances</span></li>" for v in data["versions"]
@@ -217,7 +266,7 @@ def _dashboard_html(summary: dict[str, Any]) -> str:
 <title>Drain · usage</title><style>
 :root{{color-scheme:dark;--bg:#101113;--panel:#191b20;--line:#2d3038;--muted:#9da3af;--accent:#8ee3b0}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:#f5f7fa;font:15px/1.5 system-ui,sans-serif}}main{{max-width:1100px;margin:0 auto;padding:44px 22px}}header{{display:flex;justify-content:space-between;align-items:end;border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:26px}}h1,h2,h3,p{{margin-top:0}}h1{{font-size:34px;margin-bottom:4px}}h2{{font-size:18px;margin:34px 0 14px}}.muted,small{{color:var(--muted)}}.cards{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}article,section,.table-wrap{{background:var(--panel);border:1px solid var(--line);border-radius:12px}}article{{padding:18px}}article span,article small{{display:block;color:var(--muted)}}article strong{{display:block;font-size:38px;line-height:1.15;color:var(--accent);margin:8px 0}}.versions{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}section{{padding:16px}}section h3{{margin-bottom:8px}}ul{{list-style:none;padding:0;margin:0}}li{{display:flex;justify-content:space-between;border-top:1px solid var(--line);padding:7px 0;color:var(--muted)}}code{{color:#f5f7fa}}.table-wrap{{overflow:auto}}table{{border-collapse:collapse;width:100%;min-width:650px}}th,td{{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line)}}th{{color:var(--muted);font-weight:500}}@media(max-width:760px){{.cards,.versions{{grid-template-columns:repeat(2,1fr)}}header{{display:block}}}}@media(max-width:450px){{.cards{{grid-template-columns:1fr 1fr}}article strong{{font-size:29px}}}}
 </style></head><body><main><header><div><h1>Drain</h1><p class="muted">Anonymous usage, not user surveillance.</p></div><small>Updated {esc(summary['generated_at'])}</small></header>
-<div class="cards">{cards}</div><h2>Versions</h2><div class="versions">{version_sections}</div><h2>Recent events</h2><div class="table-wrap"><table><thead><tr><th>Project</th><th>Event</th><th>Version</th><th>Platform</th><th>Received</th></tr></thead><tbody>{rows}</tbody></table></div></main></body></html>"""
+<div class="cards">{cards}</div><h2>Articles</h2><div class="table-wrap"><table><thead><tr><th>Article</th><th>Unique readers</th><th>Total reads</th><th>Last read</th></tr></thead><tbody>{article_rows}</tbody></table></div><h2>Versions</h2><div class="versions">{version_sections}</div><h2>Recent events</h2><div class="table-wrap"><table><thead><tr><th>Project</th><th>Event</th><th>Version</th><th>Platform</th><th>Received</th></tr></thead><tbody>{rows}</tbody></table></div></main></body></html>"""
 
 
 def create_app(config: dict[str, str] | None = None) -> Flask:
@@ -228,6 +277,7 @@ def create_app(config: dict[str, str] | None = None) -> Flask:
     instance_salt = config.get("instance_salt", os.environ.get("DRAIN_INSTANCE_SALT", "development-only-salt"))
 
     app = Flask(__name__)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
     app.config.update(db_path=db_path, admin_user=admin_user, admin_password=admin_password, instance_salt=instance_salt)
     app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
     init_db(db_path)
@@ -241,6 +291,11 @@ def create_app(config: dict[str, str] | None = None) -> Flask:
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        elif request.path == "/v1/article-views" and request.headers.get("Origin") == "https://timi.click":
+            response.headers["Access-Control-Allow-Origin"] = "https://timi.click"
+            response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+            response.headers["Vary"] = "Origin"
         return response
 
     @app.get("/healthz")
@@ -282,6 +337,36 @@ def create_app(config: dict[str, str] | None = None) -> Flask:
                 ),
             )
         return Response(status=204)
+
+    @app.route("/v1/article-views", methods=["OPTIONS"])
+    def article_views_options():
+        return Response(status=204)
+
+    @app.post("/v1/article-views")
+    def article_views():
+        payload = request.get_json(silent=True) or {}
+        try:
+            article = _validate_article(payload.get("article"))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
+        now = iso_now()
+        ip_hash = _article_ip_hash(article, _article_ip(), instance_salt)
+        with get_db(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO article_views(article, ip_hash, first_seen, last_seen, hits)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(article, ip_hash) DO UPDATE SET
+                    last_seen = excluded.last_seen,
+                    hits = article_views.hits + 1
+                """,
+                (article, ip_hash, now, now),
+            )
+            count = conn.execute(
+                "SELECT COUNT(*) FROM article_views WHERE article = ?", (article,)
+            ).fetchone()[0]
+        return jsonify(article=article, count=count)
 
     def require_basic_auth(view):
         @wraps(view)

@@ -69,3 +69,50 @@ def test_dashboard_requires_auth_and_renders_counts(client):
     assert response.status_code == 200
     assert b"Anonymous usage" in response.data
     assert b"nabu" in response.data
+
+
+def test_article_views_count_unique_ips_without_returning_ip(client):
+    headers = {"Origin": "https://timi.click"}
+    first = client.post(
+        "/v1/article-views", json={"article": "how-i-ship-without-reading-code"},
+        headers=headers, environ_base={"REMOTE_ADDR": "203.0.113.10"},
+    )
+    repeat = client.post(
+        "/v1/article-views", json={"article": "how-i-ship-without-reading-code"},
+        headers=headers, environ_base={"REMOTE_ADDR": "203.0.113.10"},
+    )
+    second = client.post(
+        "/v1/article-views", json={"article": "how-i-ship-without-reading-code"},
+        headers=headers, environ_base={"REMOTE_ADDR": "203.0.113.11"},
+    )
+
+    assert first.status_code == 200
+    assert first.json == {"article": "how-i-ship-without-reading-code", "count": 1}
+    assert repeat.json["count"] == 1
+    assert second.json["count"] == 2
+    assert "203.0.113" not in first.get_data(as_text=True)
+
+
+def test_article_views_reject_bad_slugs_and_foreign_origins(client):
+    assert client.post("/v1/article-views", json={"article": "../../etc"}).status_code == 400
+    response = client.post(
+        "/v1/article-views", json={"article": "hello-world"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert response.status_code == 200
+    assert "Access-Control-Allow-Origin" not in response.headers
+
+
+def test_forwarded_client_ip_is_taken_from_trusted_proxy(client):
+    response = client.post(
+        "/v1/article-views", json={"article": "hello-world"},
+        headers={"X-Forwarded-For": "203.0.113.12"},
+        environ_base={"REMOTE_ADDR": "10.0.0.2"},
+    )
+    assert response.status_code == 200
+    repeat = client.post(
+        "/v1/article-views", json={"article": "hello-world"},
+        headers={"X-Forwarded-For": "203.0.113.12"},
+        environ_base={"REMOTE_ADDR": "10.0.0.2"},
+    )
+    assert repeat.json["count"] == 1

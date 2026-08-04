@@ -16,6 +16,8 @@ Each client creates a random local instance ID. Drain stores a one-way HMAC hash
 
 The application does not store IP addresses, usernames, machine names, paths, command arguments, or event payloads beyond these fields. Reverse-proxy access logging should remain disabled or privacy-configured at the host level.
 
+For the blog, Drain also accepts `POST /v1/article-views` with an article slug. It derives the visitor IP at the edge, stores only an HMAC hash scoped to that article, and returns the aggregate unique-reader count. The public response never contains an IP address or hash. Repeated reads from the same IP count once per article; this is an approximate audience metric, not an identity system.
+
 ## Local development
 
 ```bash
